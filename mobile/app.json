@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "Art Quiz",
+    "slug": "art-quiz",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.artquiz.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.artquiz.app"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-camera",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Art Quiz necesita acceso a tus fotos para analizar cuadros."
+        }
+      ]
+    ],
+    "scheme": "art-quiz"
+  }
+}
