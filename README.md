@@ -1,62 +1,25 @@
-# 🎨 Art Quiz
+# Art Quiz
 
-App móvil que reconoce cuadros famosos usando IA. El jugador fotografía o sube una imagen de un cuadro y la app identifica el título, autor, año y movimiento artístico, generando un quiz con dificultad adaptativa.
+App móvil de quiz sobre arte. Se muestra la imagen de un cuadro y el usuario adivina el título, autor, año, movimiento artístico y museo.
 
 ---
 
-## Stack Tecnológico
+## Concepto
+
+- **Niveles bajos:** tipo test con 4 opciones
+- **Niveles altos:** escritura libre con tolerancia de 1-2 letras (distancia de Levenshtein)
+- **Dificultad adaptativa:** sube o baja automáticamente según los aciertos del usuario
+- **Base de datos:** 500 pinturas de dominio público del Art Institute of Chicago
+
+---
+
+## Stack
 
 | Capa | Tecnología |
 |------|-----------|
 | Mobile | React Native + Expo |
 | Backend | Python + FastAPI |
-| IA | CLIP (OpenAI, open source) |
-| Datos | Met Museum API + WikiArt |
-
----
-
-## Cómo arrancar el proyecto (primer día en casa)
-
-### 1. Backend
-
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate        # En Mac/Linux
-pip install -r requirements.txt
-```
-
-Descargar los primeros 500 cuadros:
-```bash
-python scripts/fetch_met_museum.py
-```
-
-Pre-calcular embeddings (solo se hace una vez):
-```bash
-python scripts/precompute_embeddings.py
-```
-
-Arrancar el servidor:
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-Verificar que funciona:
-```
-http://localhost:8000/docs   ← Swagger UI automático
-```
-
----
-
-### 2. Mobile
-
-```bash
-cd mobile
-npm install
-npx expo start
-```
-
-Escanea el QR con la app Expo Go en el móvil, o pulsa `i` para el simulador iOS.
+| Datos | Art Institute of Chicago API |
 
 ---
 
@@ -68,48 +31,26 @@ art-quiz/
 │   ├── app/
 │   │   ├── main.py                  # Entry point FastAPI
 │   │   ├── routers/
-│   │   │   └── predict.py           # POST /predict
+│   │   │   └── predict.py           # Endpoints del quiz
 │   │   ├── models/
-│   │   │   ├── clip_model.py        # Wrapper del modelo CLIP
-│   │   │   └── difficulty.py        # Lógica de dificultad
+│   │   │   └── difficulty.py        # Lógica de dificultad adaptativa
 │   │   └── data/
-│   │       ├── paintings.json       # Base de datos de cuadros
-│   │       └── embeddings.npy       # Embeddings pre-calculados
+│   │       └── paintings.json       # 500 cuadros normalizados
 │   ├── scripts/
-│   │   ├── fetch_met_museum.py      # Descarga cuadros del Met Museum
-│   │   ├── precompute_embeddings.py # Calcula embeddings (1 sola vez)
+│   │   ├── fetch_met_museum.py      # Descarga cuadros del ARTIC
+│   │   ├── translate_titles.py      # Traduce títulos al castellano
 │   │   └── validate_db.py           # Valida paintings.json
 │   └── requirements.txt
 │
-├── mobile/
-│   ├── app/
-│   │   ├── (tabs)/
-│   │   │   ├── camara.tsx           # Pantalla cámara
-│   │   │   ├── quiz.tsx             # Pantalla quiz
-│   │   │   └── historial.tsx        # Historial de partidas
-│   │   └── _layout.tsx
-│   ├── components/
-│   │   ├── TarjetaCuadro.tsx        # Tarjeta con resultado
-│   │   ├── NivelDificultad.tsx      # Badge fácil/medio/difícil
-│   │   └── BarraConfianza.tsx       # Barra de porcentaje
-│   ├── services/
-│   │   └── api.ts                   # Llamadas al backend
-│   └── package.json
-│
-└── data-pipeline/
-    ├── fetch_wikiart.py             # Scraping WikiArt (fase 2)
-    └── normalize_metadata.py        # Normaliza datos de distintas fuentes
+└── mobile/
+    ├── app/
+    │   └── (tabs)/
+    │       ├── quiz.tsx             # Pantalla quiz
+    │       └── historial.tsx        # Historial de partidas
+    ├── services/
+    │   └── api.ts                   # Llamadas al backend
+    └── package.json
 ```
-
----
-
-## Sistema de dificultad
-
-| Nivel | Confidence del modelo | Comportamiento |
-|-------|-----------------------|----------------|
-| Fácil | 80%+ | 4 opciones, 1 correcta obvia |
-| Medio | 50–80% | 4 opciones similares |
-| Difícil | <50% | Solo escribe el autor (sin pistas) |
 
 ---
 
@@ -119,16 +60,13 @@ art-quiz/
 {
   "paintings": [
     {
-      "id": "starry-night-van-gogh",
-      "titulo": "La Noche Estrellada",
-      "titulo_original": "The Starry Night",
-      "artista": "Vincent van Gogh",
-      "anio": 1889,
-      "movimiento": "Post-Impresionismo",
-      "museo": "MoMA, Nueva York",
-      "image_url": "https://...",
-      "embedding_index": 0,
-      "tags": ["noche", "cielo", "pueblo"]
+      "id": "nenufares-claude-monet",
+      "titulo": "Nenúfares",
+      "artista": "Claude Monet",
+      "anio": 1906,
+      "movimiento": "Impresionismo",
+      "museo": "Art Institute of Chicago",
+      "image_url": "https://www.artic.edu/iiif/2/.../full/600,/0/default.jpg"
     }
   ]
 }
@@ -136,44 +74,63 @@ art-quiz/
 
 ---
 
-## API Endpoints
+## Cómo arrancar el backend
 
-### `POST /predict`
-
-**Request:**
-```json
-{
-  "image": "base64...",
-  "top_k": 3
-}
+```bash
+cd backend
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
-**Response:**
-```json
-{
-  "resultado_principal": {
-    "confianza": 0.91,
-    "cuadro": { "...metadata..." },
-    "dificultad": "facil"
-  },
-  "quiz": {
-    "dificultad": "facil",
-    "opciones_incorrectas": [
-      { "artista": "Claude Monet", "titulo": "Nenúfares" },
-      { "artista": "Pablo Picasso", "titulo": "Guernica" },
-      { "artista": "Salvador Dalí", "titulo": "La Persistencia de la Memoria" }
-    ]
-  }
-}
+Regenerar la base de datos (opcional, ya incluida):
+```bash
+python scripts/fetch_met_museum.py          # descarga 500 cuadros
+python scripts/translate_titles.py          # traduce títulos al castellano
+```
+
+Arrancar el servidor:
+```bash
+uvicorn app.main:app --reload --port 8000
 ```
 
 ---
 
-## Próximos pasos (en orden)
+## API Endpoints (Semana 2)
 
-- [ ] Ejecutar `fetch_met_museum.py` y revisar los datos descargados
-- [ ] Ejecutar `precompute_embeddings.py`
-- [ ] Probar `/predict` con una imagen desde Swagger
-- [ ] Conectar el móvil al backend local
-- [ ] Diseño visual (pantallas, colores, tipografía)
-- [ ] Deploy backend a Railway o Render
+### `GET /quiz/pregunta`
+Devuelve un cuadro aleatorio con opciones incorrectas generadas.
+
+```json
+{
+  "cuadro": {
+    "id": "...",
+    "image_url": "...",
+    "nivel": 2
+  },
+  "pregunta": "¿Quién pintó este cuadro?",
+  "opciones": ["Claude Monet", "Pierre Renoir", "Paul Gauguin", "Edgar Degas"]
+}
+```
+
+### `POST /quiz/respuesta`
+Recibe la respuesta del usuario y devuelve si es correcta.
+
+```json
+{ "cuadro_id": "...", "campo": "artista", "respuesta": "Claude Monet" }
+```
+
+### `GET /quiz/progreso`
+Devuelve el nivel actual y el historial de aciertos.
+
+---
+
+## Hoja de ruta
+
+| Semana | Objetivo |
+|--------|---------|
+| ~~1~~ | Backend: datos descargados, normalizados y traducidos al castellano ✅ |
+| 2 | Backend: endpoints `/quiz/pregunta`, `/quiz/respuesta`, `/quiz/progreso` + tolerancia Levenshtein |
+| 3 | Mobile: pantalla quiz con imagen, 4 opciones, animaciones acierto/fallo |
+| 4 | Mobile: progresión de nivel, escritura libre en niveles altos, historial |
+| 5 | Polish + testing + deploy (Railway o Render) |
