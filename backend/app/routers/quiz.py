@@ -199,7 +199,13 @@ def obtener_pregunta(session_id: Optional[str] = None):
 
     # Elegir cuadro que no se haya preguntado ya en esta sesión
     vistos = set(estado["vistos"])
-    candidatos = [p for p in PAINTINGS if p["id"] not in vistos and _valor(p, campo)]
+    _DESCONOCIDOS = {"Museo desconocido", "Sin clasificar", "Desconocida", ""}
+    candidatos = [
+        p for p in PAINTINGS
+        if p["id"] not in vistos
+        and _valor(p, campo)
+        and _valor(p, campo) not in _DESCONOCIDOS
+    ]
     if not candidatos:
         # Reiniciar vistos si ya se recorrió toda la BD
         estado["vistos"] = []
