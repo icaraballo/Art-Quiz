@@ -196,20 +196,30 @@ def obtener_pregunta(session_id: Optional[str] = None):
     nivel = estado["nivel"]
     cfg = config_nivel(nivel)
     campo = cfg["campo"]
+    popularidad_min = cfg.get("popularidad_min", 1)
 
     # Elegir cuadro que no se haya preguntado ya en esta sesión
     vistos = set(estado["vistos"])
     _DESCONOCIDOS = {"Museo desconocido", "Sin clasificar", "Desconocida", ""}
-    candidatos = [
-        p for p in PAINTINGS
-        if p["id"] not in vistos
-        and _valor(p, campo)
-        and _valor(p, campo) not in _DESCONOCIDOS
-    ]
+
+    def _candidatos_para(pool: list[dict]) -> list[dict]:
+        return [
+            p for p in pool
+            if p["id"] not in vistos
+            and _valor(p, campo)
+            and _valor(p, campo) not in _DESCONOCIDOS
+            and p.get("popularidad", 1) >= popularidad_min
+        ]
+
+    candidatos = _candidatos_para(PAINTINGS)
     if not candidatos:
-        # Reiniciar vistos si ya se recorrió toda la BD
+        # Reiniciar vistos y reintentar con filtro de popularidad
         estado["vistos"] = []
-        candidatos = [p for p in PAINTINGS if _valor(p, campo)]
+        vistos = set()
+        candidatos = _candidatos_para(PAINTINGS)
+    if not candidatos:
+        # Fallback sin filtro de popularidad (pool muy pequeño)
+        candidatos = [p for p in PAINTINGS if _valor(p, campo) and _valor(p, campo) not in _DESCONOCIDOS]
 
     painting = random.choice(candidatos)
     estado["vistos"].append(painting["id"])

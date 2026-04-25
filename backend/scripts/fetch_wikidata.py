@@ -41,18 +41,45 @@ HEADERS = {
 # ---------------------------------------------------------------------------
 
 SPARQL_PAGE = """
-SELECT ?painting ?image ?artist WHERE {{
+SELECT ?painting ?image ?artist ?sitelinks WHERE {{
   ?painting wdt:P31 wd:Q3305213 ;
             wdt:P18 ?image ;
             wdt:P170 ?artist .
   ?artist wdt:P570 ?fechaMuerte .
   FILTER(YEAR(?fechaMuerte) < 1927)
+  ?painting wikibase:sitelinks ?sitelinks .
 }}
 LIMIT {limit} OFFSET {offset}
 """
 
 BATCH_SPARQL = 50
 DELAY_SPARQL = 3.0
+
+# QIDs de pinturas icónicas que deben estar siempre en el dataset
+CURATED_QIDS: dict[str, str] = {
+    "Q12418":   "Q762",    # Mona Lisa — Leonardo da Vinci
+    "Q174":     "Q5593",   # Las Meninas — Velázquez
+    "Q45585":   "Q5582",   # La noche estrellada — Van Gogh
+    "Q151991":  "Q5679",   # La ronda de noche — Rembrandt
+    "Q170571":  "Q39246",  # El nacimiento de Venus — Botticelli
+    "Q131112":  "Q41406",  # La balsa de la Medusa — Géricault
+    "Q214867":  "Q39718",  # El matrimonio Arnolfini — Van Eyck
+    "Q154426":  "Q5582",   # Los girasoles — Van Gogh
+    "Q46538":   "Q5592",   # La última cena — Leonardo da Vinci
+    "Q173281":  "Q39259",  # La joven de la perla — Vermeer
+    "Q3674":    "Q5599",   # Los fusilamientos del 3 de mayo — Goya
+    "Q210804":  "Q39246",  # Primavera — Botticelli
+    "Q3681":    "Q5593",   # Las hilanderas — Velázquez
+    "Q193076":  "Q5582",   # La noche de café — Van Gogh
+    "Q1141037": "Q762",    # La dama del armiño — Leonardo da Vinci
+    "Q46538":   "Q5592",   # La última cena — Leonardo
+    "Q182537":  "Q5597",   # Saturno devorando a su hijo — Goya
+    "Q4765":    "Q41406",  # Liberty Leading the People — Delacroix
+    "Q46735":   "Q41406",  # La muerte de Sardanápalo — Delacroix
+    "Q191667":  "Q41531",  # Olympia — Manet
+    "Q182564":  "Q41531",  # Le Déjeuner sur l'herbe — Manet
+    "Q48584":   "Q36359",  # Impression, Sunrise — Monet
+}
 
 
 def _sparql_page(offset: int) -> list[dict]:
@@ -78,10 +105,17 @@ def _sparql_page(offset: int) -> list[dict]:
 
 
 def obtener_ids(objetivo: int) -> list[dict]:
-    """Devuelve lista de {qid, image_raw, artist_qid} sin duplicados."""
+    """Devuelve lista de {qid, image_raw, artist_qid, sitelinks} sin duplicados.
+    Siempre incluye los QIDs del curated list."""
     print(f"Paso 1: obteniendo QIDs de Wikidata (objetivo ~{objetivo})...")
     resultados: list[dict] = []
     qids_vistos: set[str] = set()
+
+    # Incluir curated QIDs primero (con sitelinks alto garantizado)
+    for qid, artist_qid in CURATED_QIDS.items():
+        if qid not in qids_vistos:
+            qids_vistos.add(qid)
+            resultados.append({"qid": qid, "image_raw": "", "artist_qid": artist_qid, "sitelinks": 200})
     offset = 0
 
     with tqdm(total=objetivo, unit="id") as pbar:
@@ -96,7 +130,8 @@ def obtener_ids(objetivo: int) -> list[dict]:
                 art = row.get("artist", {}).get("value", "").split("/")[-1]
                 if qid and qid not in qids_vistos and img:
                     qids_vistos.add(qid)
-                    resultados.append({"qid": qid, "image_raw": img, "artist_qid": art})
+                    sl = int(row.get("sitelinks", {}).get("value", 0) or 0)
+                    resultados.append({"qid": qid, "image_raw": img, "artist_qid": art, "sitelinks": sl})
                     nuevos += 1
             pbar.update(nuevos)
             offset += BATCH_SPARQL
@@ -298,6 +333,7 @@ def enriquecer(ids_data: list[dict]) -> list[dict]:
             "movimiento":      movimi,
             "image_filename":  img_fn,
             "materiales":      mat_labels,
+            "sitelinks":       d.get("sitelinks", 0),
         })
 
     return resultados
@@ -387,6 +423,23 @@ def _combinar_tipo(materiales: list[str]) -> str:
     return f"{medio} sobre {soporte}"
 
 
+def _popularidad(sitelinks: int) -> int:
+    """1 (desconocida) a 5 (icónica) según número de sitelinks de Wikipedia."""
+    if sitelinks >= 100: return 5
+    if sitelinks >= 40:  return 4
+    if sitelinks >= 15:  return 3
+    if sitelinks >= 5:   return 2
+    return 1
+
+
+def _es_completa(p: dict) -> bool:
+    return (
+        p["museo"]      not in {"Museo desconocido", ""}
+        and p["movimiento"] not in {"Sin clasificar", ""}
+        and p["tipo"]       not in {"Pintura", ""}
+    )
+
+
 _RE_SALA = re.compile(
     r"^(Room|Salle|Sala|Raum|Zaal|Gallery|Galerie)\b",
     re.IGNORECASE,
@@ -408,7 +461,9 @@ def normalizar(raw: dict, ids_vistos: set[str]) -> dict | None:
     movimi = (raw.get("movimiento") or "Sin clasificar").strip()
     movimi = movimi[0].upper() + movimi[1:] if movimi else movimi
     epoca  = calcular_epoca(anio)
-    tipo   = _combinar_tipo(raw.get("materiales", []))
+    tipo       = _combinar_tipo(raw.get("materiales", []))
+    sitelinks  = raw.get("sitelinks", 0)
+    popularidad = _popularidad(sitelinks)
 
     base_id = slugify(f"{titulo}-{artista}")
     uid = base_id
@@ -429,6 +484,7 @@ def normalizar(raw: dict, ids_vistos: set[str]) -> dict | None:
         "tipo":            tipo,
         "epoca":           epoca,
         "museo":           museo,
+        "popularidad":     popularidad,
         "image_url":       commons_thumbnail(img_fn),
     }
 
@@ -445,7 +501,7 @@ def main(limite: int = 1000):
         with open(RAW_PATH, encoding="utf-8") as f:
             raw_list = json.load(f)
     else:
-        ids_data = obtener_ids(objetivo=min(limite + 300, 2000))
+        ids_data = obtener_ids(objetivo=min(limite + 800, 3000))
         if not ids_data:
             print("Sin datos de SPARQL. Abortando.")
             return
@@ -455,29 +511,35 @@ def main(limite: int = 1000):
             json.dump(raw_list, f, ensure_ascii=False, indent=2)
         print(f"Caché guardada en {RAW_PATH}")
 
-    print(f"\nNormalizando (objetivo: {limite})...")
-    paintings: list[dict] = []
+    print(f"\nNormalizando (objetivo: {limite} completas)...")
+    todas: list[dict] = []
     ids_vistos: set[str] = set()
     for raw in raw_list:
-        if len(paintings) >= limite:
-            break
         p = normalizar(raw, ids_vistos)
         if p:
-            paintings.append(p)
+            todas.append(p)
 
-    # Inferencia intra-dataset: artistas con ≥1 pintura con movimiento
-    # rellenan el movimiento de sus obras sin clasificar
+    # Inferencia intra-dataset: propaga movimiento del artista a sus obras sin clasificar
     artista_mov: dict[str, str] = {}
-    for p in paintings:
+    for p in todas:
         if p["movimiento"] != "Sin clasificar":
             artista_mov.setdefault(p["artista"], p["movimiento"])
     inferidos = 0
-    for p in paintings:
+    for p in todas:
         if p["movimiento"] == "Sin clasificar" and p["artista"] in artista_mov:
             p["movimiento"] = artista_mov[p["artista"]]
             inferidos += 1
     if inferidos:
         print(f"  Movimiento inferido por artista (dataset): {inferidos} pinturas")
+
+    # Priorizar pinturas con todos los campos completos
+    completas   = [p for p in todas if _es_completa(p)]
+    incompletas = [p for p in todas if not _es_completa(p)]
+    paintings   = completas[:limite]
+    if len(paintings) < limite:
+        paintings += incompletas[:limite - len(paintings)]
+    print(f"  Total procesadas: {len(todas)} | Completas: {len(completas)} | "
+          f"Usadas: {len(paintings)} (incompletas relleno: {max(0, len(paintings)-len(completas))})")
 
     datos = {
         "paintings": paintings,
