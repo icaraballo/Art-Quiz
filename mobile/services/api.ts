@@ -20,9 +20,20 @@ export interface RespuestaResult {
   correcto: boolean;
   respuesta_correcta: string;
   titulo_original: string;
+  titulo: string;
+  artista: string;
   nivel_anterior: number;
   nivel_nuevo: number;
   racha: number;
+}
+
+export interface Progreso {
+  session_id: string;
+  nivel: number;
+  total_preguntas: number;
+  total_aciertos: number;
+  porcentaje: number;
+  racha_actual: number;
 }
 
 export async function obtenerPregunta(sessionId?: string): Promise<Pregunta> {
@@ -45,6 +56,12 @@ export async function enviarRespuesta(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: sessionId, cuadro_id: cuadroId, campo, respuesta }),
   });
+  if (!res.ok) throw new Error(`Error ${res.status}`);
+  return res.json();
+}
+
+export async function obtenerProgreso(sessionId: string): Promise<Progreso> {
+  const res = await fetch(`${BASE_URL}/quiz/progreso?session_id=${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error(`Error ${res.status}`);
   return res.json();
 }

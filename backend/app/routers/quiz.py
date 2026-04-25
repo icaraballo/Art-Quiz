@@ -288,6 +288,8 @@ def validar_respuesta(body: RespuestaRequest):
         "correcto": correcto,
         "respuesta_correcta": _valor(painting, body.campo),
         "titulo_original": painting.get("titulo_original", ""),
+        "titulo": painting.get("titulo", ""),
+        "artista": painting.get("artista", ""),
         "nivel_anterior": nivel_anterior,
         "nivel_nuevo": nuevo_nivel,
         "racha": nueva_racha,
