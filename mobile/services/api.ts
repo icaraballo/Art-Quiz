@@ -1,63 +1,58 @@
-/**
- * Servicio de comunicación con el backend de Art Quiz.
- *
- * En desarrollo: apunta a tu Mac local.
- * En producción: cambia BASE_URL a la URL de Railway/Render.
- */
-
-// ⚠️ Cambia esta IP por la IP de tu Mac en la red local
-// La encuentras en: Ajustes del Mac → WiFi → detalles de la red
+// ⚠️ Cambia esta IP por la de tu Mac: Ajustes → WiFi → detalles de red
 const BASE_URL = "http://192.168.1.100:8000";
 
-export interface CuadroMetadata {
-  id: string;
-  titulo: string;
-  artista: string;
-  anio: number;
-  movimiento: string;
-  museo: string;
-  image_url: string;
+export interface Pregunta {
+  session_id: string;
+  nivel: number;
+  cuadro: {
+    id: string;
+    image_url: string;
+    titulo_display: string;
+  };
+  pregunta: string;
+  campo: string;
+  modo: "test" | "libre";
+  opciones: string[] | null;
+  ya_visto: boolean;
 }
 
-export interface ResultadoPrediccion {
-  resultado_principal: {
-    confianza: number;
-    cuadro: CuadroMetadata;
-    dificultad: "facil" | "medio" | "dificil";
-  };
-  quiz: {
-    dificultad: "facil" | "medio" | "dificil";
-    opciones_incorrectas: Array<{ artista: string; titulo: string }>;
-  };
-  total_cuadros_bd: number;
+export interface RespuestaResult {
+  correcto: boolean;
+  respuesta_correcta: string;
+  titulo_original: string;
+  nivel_anterior: number;
+  nivel_nuevo: number;
+  racha: number;
 }
 
-/**
- * Envía una imagen al backend y recibe la predicción.
- * @param imagenBase64 - Imagen codificada en base64 (sin el prefijo data:image/...)
- */
-export async function predecirCuadro(imagenBase64: string): Promise<ResultadoPrediccion> {
-  const response = await fetch(`${BASE_URL}/predict/`, {
+export async function obtenerPregunta(sessionId?: string): Promise<Pregunta> {
+  const url = sessionId
+    ? `${BASE_URL}/quiz/pregunta?session_id=${encodeURIComponent(sessionId)}`
+    : `${BASE_URL}/quiz/pregunta`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Error ${res.status}`);
+  return res.json();
+}
+
+export async function enviarRespuesta(
+  sessionId: string,
+  cuadroId: string,
+  campo: string,
+  respuesta: string,
+): Promise<RespuestaResult> {
+  const res = await fetch(`${BASE_URL}/quiz/respuesta`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image: imagenBase64, top_k: 3 }),
+    body: JSON.stringify({ session_id: sessionId, cuadro_id: cuadroId, campo, respuesta }),
   });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.detail || `Error del servidor: ${response.status}`);
-  }
-
-  return response.json();
+  if (!res.ok) throw new Error(`Error ${res.status}`);
+  return res.json();
 }
 
-/**
- * Comprueba si el servidor está disponible.
- */
 export async function verificarConexion(): Promise<boolean> {
   try {
-    const response = await fetch(`${BASE_URL}/salud`, { method: "GET" });
-    return response.ok;
+    const res = await fetch(`${BASE_URL}/salud`, { method: "GET" });
+    return res.ok;
   } catch {
     return false;
   }
