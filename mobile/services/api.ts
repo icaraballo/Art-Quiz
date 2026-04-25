@@ -1,5 +1,5 @@
 // ⚠️ Cambia esta IP por la de tu Mac: Ajustes → WiFi → detalles de red
-const BASE_URL = "http://192.168.1.100:8000";
+const BASE_URL = "http://192.168.1.138:8000";
 
 export interface Pregunta {
   session_id: string;
