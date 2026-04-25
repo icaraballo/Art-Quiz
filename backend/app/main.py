@@ -1,27 +1,26 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import predict
+from app.routers import quiz
 
 app = FastAPI(
     title="Art Quiz API",
-    description="Reconocimiento de cuadros famosos mediante IA",
-    version="0.1.0"
+    description="Quiz de arte con pinturas de los mejores museos del mundo",
+    version="0.2.0",
 )
 
-# CORS para que el móvil pueda llamar al servidor local
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, restringir a la IP del móvil
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(predict.router)
+app.include_router(quiz.router)
 
 
 @app.get("/")
 def root():
-    return {"status": "ok", "mensaje": "Art Quiz API funcionando"}
+    return {"status": "ok", "version": "0.2.0"}
 
 
 @app.get("/salud")
