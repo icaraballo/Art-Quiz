@@ -57,18 +57,24 @@ DELAY_SPARQL = 3.0
 
 def _sparql_page(offset: int) -> list[dict]:
     q = SPARQL_PAGE.format(limit=BATCH_SPARQL, offset=offset)
-    try:
-        r = requests.get(
-            SPARQL_ENDPOINT,
-            params={"query": q, "format": "json"},
-            headers=HEADERS,
-            timeout=40,
-        )
-        r.raise_for_status()
-        return r.json().get("results", {}).get("bindings", [])
-    except Exception as e:
-        print(f"  SPARQL offset {offset}: {e}")
-        return []
+    for intento in range(3):
+        try:
+            r = requests.get(
+                SPARQL_ENDPOINT,
+                params={"query": q, "format": "json"},
+                headers=HEADERS,
+                timeout=90,
+            )
+            r.raise_for_status()
+            return r.json().get("results", {}).get("bindings", [])
+        except Exception as e:
+            espera = 15 * (intento + 1)
+            if intento < 2:
+                print(f"  SPARQL offset {offset}: {e} — reintentando en {espera}s...")
+                time.sleep(espera)
+            else:
+                print(f"  SPARQL offset {offset}: {e} — descartando página")
+    return []
 
 
 def obtener_ids(objetivo: int) -> list[dict]:
@@ -119,7 +125,8 @@ def _wbget(qids: list[str]) -> dict:
                 "action": "wbgetentities",
                 "ids": "|".join(qids),
                 "languages": "es|en",
-                "props": "labels|claims",
+                "props": "labels|claims|sitelinks",
+                "sitefilter": "eswiki",
                 "format": "json",
             },
             headers=HEADERS,
@@ -178,6 +185,44 @@ def _claim_year(entity: dict) -> int | None:
     return None
 
 
+def _claim_qids_all(entity: dict, prop: str) -> list[str]:
+    """Devuelve todos los QIDs de una propiedad multivalor (p.ej. P186)."""
+    result = []
+    for c in entity.get("claims", {}).get(prop, []):
+        snak = c.get("mainsnak", {})
+        if snak.get("snaktype") != "value":
+            continue
+        dv = snak.get("datavalue", {})
+        if dv.get("type") == "wikibase-entityid":
+            nid = dv.get("value", {}).get("numeric-id", "")
+            if nid:
+                result.append(f"Q{nid}")
+    return result
+
+
+_RE_DISAMBIG = re.compile(r"\s*\([^)]+\)\s*$")
+
+
+def _titulo_es(entity: dict) -> str:
+    """Título en español: sitelink eswiki (Wikipedia ES) > label es."""
+    sl = entity.get("sitelinks", {}).get("eswiki", {})
+    title = sl.get("title", "")
+    if title:
+        return _RE_DISAMBIG.sub("", title).strip()
+    v = entity.get("labels", {}).get("es")
+    if v:
+        return v["value"] if isinstance(v, dict) else str(v)
+    return ""
+
+
+def _titulo_en(entity: dict) -> str:
+    """Título en inglés u original (label en)."""
+    v = entity.get("labels", {}).get("en")
+    if v:
+        return v["value"] if isinstance(v, dict) else str(v)
+    return ""
+
+
 def enriquecer(ids_data: list[dict]) -> list[dict]:
     painting_qids = [d["qid"] for d in ids_data]
     artist_qids   = list({d["artist_qid"] for d in ids_data if d["artist_qid"]})
@@ -194,7 +239,7 @@ def enriquecer(ids_data: list[dict]) -> list[dict]:
         a_ents.update(_wbget(artist_qids[i: i + BATCH_API]))
         time.sleep(DELAY_API)
 
-    # Recoger QIDs de museos (P195 = colección) y movimientos (P135)
+    # Recoger QIDs de museos (P195), movimientos (P135), materiales (P186)
     extra_qids: set[str] = set()
     for qid, ent in p_ents.items():
         m = _claim_qid(ent, "P195") or _claim_qid(ent, "P276")
@@ -203,19 +248,29 @@ def enriquecer(ids_data: list[dict]) -> list[dict]:
         mv = _claim_qid(ent, "P135")
         if mv:
             extra_qids.add(mv)
+        for mat in _claim_qids_all(ent, "P186"):
+            extra_qids.add(mat)
+    # Movimientos del artista como fallback (P135 en la entidad del artista)
+    for a_ent in a_ents.values():
+        mv = _claim_qid(a_ent, "P135")
+        if mv:
+            extra_qids.add(mv)
 
-    print(f"  Descargando {len(extra_qids)} museos/movimientos...")
+    extra_list = list(extra_qids)
+    print(f"  Descargando {len(extra_list)} museos/movimientos/materiales...")
     ex_ents: dict[str, dict] = {}
-    for i in tqdm(range(0, len(list(extra_qids)), BATCH_API), desc="  extras", unit="batch"):
-        chunk = list(extra_qids)[i: i + BATCH_API]
+    for i in tqdm(range(0, len(extra_list), BATCH_API), desc="  extras", unit="batch"):
+        chunk = extra_list[i: i + BATCH_API]
         ex_ents.update(_wbget(chunk))
         time.sleep(DELAY_API)
 
     resultados: list[dict] = []
     for d in ids_data:
-        ent     = p_ents.get(d["qid"], {})
-        titulo  = _label(ent)
-        artista = _label(a_ents.get(d["artist_qid"], {}))
+        ent        = p_ents.get(d["qid"], {})
+        titulo_es  = _titulo_es(ent)
+        titulo_en  = _titulo_en(ent)
+        titulo     = titulo_es or titulo_en
+        artista    = _label(a_ents.get(d["artist_qid"], {}))
         if not titulo or not artista:
             continue
         if re.match(r"^Q\d+$", titulo) or re.match(r"^Q\d+$", artista):
@@ -225,17 +280,24 @@ def enriquecer(ids_data: list[dict]) -> list[dict]:
         # Museo: P195 (colección) > P276 (ubicación)
         m_qid   = _claim_qid(ent, "P195") or _claim_qid(ent, "P276")
         museo   = _label(ex_ents.get(m_qid, {})) or "Museo desconocido"
-        mv_qid  = _claim_qid(ent, "P135")
+        # Movimiento: primero de la pintura, luego del artista como fallback
+        mv_qid = (_claim_qid(ent, "P135")
+                  or _claim_qid(a_ents.get(d["artist_qid"], {}), "P135"))
         movimi  = _label(ex_ents.get(mv_qid, {})) or "Sin clasificar"
         img_fn  = _claim_image(ent) or d["image_raw"].split("/")[-1]
+        mat_qids   = _claim_qids_all(ent, "P186")
+        mat_labels = [_label(ex_ents.get(q, {})) for q in mat_qids]
+        mat_labels = [l for l in mat_labels if l]
 
         resultados.append({
-            "titulo":         titulo,
-            "artista":        artista,
-            "anio":           anio,
-            "museo":          museo,
-            "movimiento":     movimi,
-            "image_filename": img_fn,
+            "titulo":          titulo,
+            "titulo_original": titulo_en or titulo,
+            "artista":         artista,
+            "anio":            anio,
+            "museo":           museo,
+            "movimiento":      movimi,
+            "image_filename":  img_fn,
+            "materiales":      mat_labels,
         })
 
     return resultados
@@ -300,6 +362,31 @@ def calcular_epoca(anio: int | None) -> str:
     return "Arte Contemporáneo"
 
 
+# Materiales que son soporte (van en la segunda parte: "X sobre Y")
+_SOPORTES = {
+    "lienzo", "tabla", "madera", "cobre", "papel", "cartón", "marfil",
+    "pared", "muro", "seda", "tela", "pergamino", "piedra", "yeso",
+    "panel", "canvas", "wood", "copper", "paper",
+}
+
+
+def _combinar_tipo(materiales: list[str]) -> str:
+    """Combina labels P186 en formato legible: 'Óleo sobre lienzo'."""
+    clean = [l.strip() for l in materiales if l.strip()]
+    if not clean:
+        return "Pintura"
+    medios    = [l for l in clean if l.lower() not in _SOPORTES]
+    soportes  = [l for l in clean if l.lower() in _SOPORTES]
+    partes    = medios[:1] + soportes[:1]
+    if not partes:
+        partes = clean[:2]
+    if len(partes) == 1:
+        return partes[0][0].upper() + partes[0][1:]
+    medio   = partes[0][0].upper() + partes[0][1:]
+    soporte = partes[1].lower()
+    return f"{medio} sobre {soporte}"
+
+
 _RE_SALA = re.compile(
     r"^(Room|Salle|Sala|Raum|Zaal|Gallery|Galerie)\b",
     re.IGNORECASE,
@@ -307,19 +394,21 @@ _RE_SALA = re.compile(
 
 
 def normalizar(raw: dict, ids_vistos: set[str]) -> dict | None:
-    titulo  = raw.get("titulo", "").strip()
-    artista = raw.get("artista", "").strip()
-    img_fn  = raw.get("image_filename", "")
+    titulo          = raw.get("titulo", "").strip()
+    titulo_original = raw.get("titulo_original", titulo).strip()
+    artista         = raw.get("artista", "").strip()
+    img_fn          = raw.get("image_filename", "")
     if not titulo or not artista or not img_fn:
         return None
 
-    anio    = raw.get("anio")
+    anio      = raw.get("anio")
     museo_raw = (raw.get("museo") or "").strip()
     # Si el museo apunta a una sala/habitación específica, usar valor genérico
-    museo = museo_raw if museo_raw and not _RE_SALA.match(museo_raw) else "Museo desconocido"
-    movimi  = (raw.get("movimiento") or "Sin clasificar").strip()
-    movimi  = movimi[0].upper() + movimi[1:] if movimi else movimi
-    epoca   = calcular_epoca(anio)
+    museo  = museo_raw if museo_raw and not _RE_SALA.match(museo_raw) else "Museo desconocido"
+    movimi = (raw.get("movimiento") or "Sin clasificar").strip()
+    movimi = movimi[0].upper() + movimi[1:] if movimi else movimi
+    epoca  = calcular_epoca(anio)
+    tipo   = _combinar_tipo(raw.get("materiales", []))
 
     base_id = slugify(f"{titulo}-{artista}")
     uid = base_id
@@ -330,17 +419,17 @@ def normalizar(raw: dict, ids_vistos: set[str]) -> dict | None:
     ids_vistos.add(uid)
 
     return {
-        "id":             uid,
-        "titulo":         titulo,
-        "titulo_original": titulo,
-        "artista":        artista,
-        "anio":           anio or 0,
-        "anio_display":   str(anio) if anio else "Desconocido",
-        "movimiento":     movimi,
-        "tipo":           "Pintura",
-        "epoca":          epoca,
-        "museo":          museo,
-        "image_url":      commons_thumbnail(img_fn),
+        "id":              uid,
+        "titulo":          titulo,
+        "titulo_original": titulo_original or titulo,
+        "artista":         artista,
+        "anio":            anio or 0,
+        "anio_display":    str(anio) if anio else "Desconocido",
+        "movimiento":      movimi,
+        "tipo":            tipo,
+        "epoca":           epoca,
+        "museo":           museo,
+        "image_url":       commons_thumbnail(img_fn),
     }
 
 
@@ -375,6 +464,20 @@ def main(limite: int = 1000):
         p = normalizar(raw, ids_vistos)
         if p:
             paintings.append(p)
+
+    # Inferencia intra-dataset: artistas con ≥1 pintura con movimiento
+    # rellenan el movimiento de sus obras sin clasificar
+    artista_mov: dict[str, str] = {}
+    for p in paintings:
+        if p["movimiento"] != "Sin clasificar":
+            artista_mov.setdefault(p["artista"], p["movimiento"])
+    inferidos = 0
+    for p in paintings:
+        if p["movimiento"] == "Sin clasificar" and p["artista"] in artista_mov:
+            p["movimiento"] = artista_mov[p["artista"]]
+            inferidos += 1
+    if inferidos:
+        print(f"  Movimiento inferido por artista (dataset): {inferidos} pinturas")
 
     datos = {
         "paintings": paintings,
