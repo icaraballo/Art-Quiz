@@ -213,10 +213,12 @@ def obtener_pregunta(session_id: Optional[str] = None):
         ]
 
     candidatos = _candidatos_para(PAINTINGS)
+    ya_visto = False
     if not candidatos:
-        # Reiniciar vistos y reintentar con filtro de popularidad
+        # Pool agotado — reiniciar vistos y marcar como repetición
         estado["vistos"] = []
         vistos = set()
+        ya_visto = True
         candidatos = _candidatos_para(PAINTINGS)
     if not candidatos:
         # Fallback sin filtro de popularidad (pool muy pequeño)
@@ -244,6 +246,7 @@ def obtener_pregunta(session_id: Optional[str] = None):
         "campo": campo,
         "modo": modo,
         "opciones": opciones,
+        "ya_visto": ya_visto,
     }
 
 
