@@ -1,29 +1,31 @@
 """
 Configuración de niveles y lógica de dificultad adaptativa.
 
-La dificultad depende de la POPULARIDAD del cuadro (campo `popularidad` 1-5
-basado en sitelinks de Wikipedia), no del tipo de pregunta.
+La dificultad tiene dos ejes:
+  1. POPULARIDAD del cuadro (sitelinks Wikipedia): niveles bajos = cuadros famosos
+  2. CAMPOS disponibles: se amplían progresivamente (artista/título → movimiento → museo)
 
-Niveles 1-8: tipo test (4 opciones), de pinturas icónicas a desconocidas.
-Niveles 9-10: escritura libre con tolerancia Levenshtein, cualquier pintura.
+En cada pregunta el backend elige aleatoriamente entre los campos del nivel.
+Niveles 1-8: tipo test (4 opciones).
+Niveles 9-10: escritura libre, tolerancia Levenshtein.
 """
 
 NIVELES: dict[int, dict] = {
-    # Pinturas icónicas del dataset (popularidad 4: 40-99 sitelinks — ~18 cuadros)
-    1:  {"campo": "artista", "modo": "test",  "distractor": "global",     "popularidad_min": 4},
-    2:  {"campo": "titulo",  "modo": "test",  "distractor": "global",     "popularidad_min": 4},
-    # Pinturas bastante conocidas (popularidad ≥ 3: 15+ sitelinks — ~235 cuadros)
-    3:  {"campo": "artista", "modo": "test",  "distractor": "global",     "popularidad_min": 3},
-    4:  {"campo": "titulo",  "modo": "test",  "distractor": "global",     "popularidad_min": 3},
-    # Pinturas algo conocidas (popularidad ≥ 2: 5+ sitelinks — ~733 cuadros)
-    5:  {"campo": "artista", "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
-    6:  {"campo": "titulo",  "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
-    # Cualquier pintura, opción múltiple (267 muy oscuras se añaden aquí)
-    7:  {"campo": "artista", "modo": "test",  "distractor": "movimiento", "popularidad_min": 1},
-    8:  {"campo": "titulo",  "modo": "test",  "distractor": "movimiento", "popularidad_min": 1},
-    # Cualquier pintura, escritura libre
-    9:  {"campo": "artista", "modo": "libre", "max_distancia": 2,         "popularidad_min": 1},
-    10: {"campo": "titulo",  "modo": "libre", "max_distancia": 2,         "popularidad_min": 1},
+    # Pinturas icónicas (~25), solo artista/título
+    1:  {"campos": ["artista", "titulo"],                          "modo": "test",  "distractor": "global",     "popularidad_min": 4},
+    2:  {"campos": ["artista", "titulo"],                          "modo": "test",  "distractor": "global",     "popularidad_min": 4},
+    # Pinturas conocidas (~218), se añade movimiento
+    3:  {"campos": ["artista", "titulo", "movimiento"],            "modo": "test",  "distractor": "global",     "popularidad_min": 3},
+    4:  {"campos": ["artista", "titulo", "movimiento"],            "modo": "test",  "distractor": "global",     "popularidad_min": 3},
+    # Pinturas moderadas (~723), se añade museo; distractores del mismo movimiento
+    5:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
+    6:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
+    # Todas las pinturas (~1000), todos los campos
+    7:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 1},
+    8:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 1},
+    # Escritura libre, cualquier pintura, solo artista/título
+    9:  {"campos": ["artista", "titulo"],                          "modo": "libre", "max_distancia": 2,         "popularidad_min": 1},
+    10: {"campos": ["artista", "titulo"],                          "modo": "libre", "max_distancia": 2,         "popularidad_min": 1},
 }
 
 PREGUNTAS: dict[str, str] = {

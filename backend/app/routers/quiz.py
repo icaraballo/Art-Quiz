@@ -195,7 +195,8 @@ def obtener_pregunta(session_id: Optional[str] = None):
 
     nivel = estado["nivel"]
     cfg = config_nivel(nivel)
-    campo = cfg["campo"]
+    campos_posibles = cfg["campos"]
+    campo = random.choice(campos_posibles)
     popularidad_min = cfg.get("popularidad_min", 1)
 
     # Elegir cuadro que no se haya preguntado ya en esta sesión
