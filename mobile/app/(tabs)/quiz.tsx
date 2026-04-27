@@ -3,7 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
-  Image,
+  Dimensions,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -13,10 +13,14 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+
+const SCREEN_WIDTH = Dimensions.get("window").width;
+import { Image } from "expo-image";
 import {
   obtenerPregunta,
   enviarRespuesta,
   obtenerProgreso,
+  imagenUrl,
   type Pregunta,
   type RespuestaResult,
   type Progreso,
@@ -56,6 +60,8 @@ export default function PantallaQuiz() {
   const [stats, setStats]             = useState<Stats>({ total: 0, aciertos: 0, nivelMax: 1, rachaMax: 0 });
   const [progreso, setProgreso]       = useState<Progreso | null>(null);
   const [imageLoading, setImageLoading] = useState(true);
+  const [imageBase64, setImageBase64] = useState<string | null>(null);
+  const [imageRatio, setImageRatio] = useState(4 / 3);
 
   // Level-up / level-down overlay
   const [cambioNivel, setCambioNivel] = useState<{ nuevo: number; subio: boolean } | null>(null);
@@ -76,9 +82,21 @@ export default function PantallaQuiz() {
     Animated.timing(animOpacity, { toValue: 1, duration: 900, useNativeDriver: true }).start();
   }, []);
 
-  // Reset imageLoading cuando cambia el cuadro
+  // Cargar imagen via fetch (evita restricciones HTTP nativas de Android)
   useEffect(() => {
+    if (!pregunta?.cuadro.image_url) return;
     setImageLoading(true);
+    setImageBase64(null);
+    fetch(imagenUrl(pregunta.cuadro.image_url))
+      .then(r => r.arrayBuffer())
+      .then(buf => {
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+        setImageBase64("data:image/jpeg;base64," + btoa(binary));
+        setImageLoading(false);
+      })
+      .catch(() => setImageLoading(false));
   }, [pregunta?.cuadro.id]);
 
   const bgColor = animFondo.interpolate({
@@ -269,14 +287,18 @@ export default function PantallaQuiz() {
             </View>
 
             {/* IMAGEN */}
-            <View style={s.imagenWrap}>
-              <Image
-                source={{ uri: pregunta.cuadro.image_url }}
-                style={s.imagen}
-                resizeMode="cover"
-                onLoadStart={() => setImageLoading(true)}
-                onLoadEnd={() => setImageLoading(false)}
-              />
+            <View style={[s.imagenWrap, { height: Math.min((SCREEN_WIDTH - 40) / imageRatio, 260) }]}>
+              {imageBase64 && (
+                <Image
+                  source={imageBase64}
+                  style={s.imagen}
+                  contentFit="contain"
+                  onLoad={(e) => {
+                    const { width, height } = e.source;
+                    if (width && height) setImageRatio(width / height);
+                  }}
+                />
+              )}
 
               {/* Placeholder mientras carga */}
               {imageLoading && (
@@ -471,10 +493,9 @@ const s = StyleSheet.create({
   // Imagen
   imagenWrap: {
     marginHorizontal: 20,
-    height: 220,
     borderRadius: 18,
     overflow: "hidden",
-    backgroundColor: C.tarjeta,
+    backgroundColor: "#000",
     marginBottom: 16,
   },
   imagen: { width: "100%", height: "100%" },

@@ -22,6 +22,13 @@ mobile/node_modules/
 mobile/.expo/
 mobile/dist/
 
+# Claude memory
+.claude/
+
+# Raw data files (se regeneran)
+backend/app/data/_raw.json
+backend/app/data/_raw_wikidata.json
+
 # macOS
 .DS_Store
 

@@ -12,7 +12,9 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+import requests
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.models.difficulty import (
@@ -317,3 +319,19 @@ def obtener_progreso(session_id: str):
         "racha_actual": estado["racha"],
         "historial": historial[-20:],  # últimas 20 entradas
     }
+
+
+# ---------------------------------------------------------------------------
+# GET /quiz/imagen  — proxy para imágenes de Wikimedia
+# ---------------------------------------------------------------------------
+
+@router.get("/imagen")
+def proxy_imagen(url: str):
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "ArtQuizApp/1.0 (educational)"})
+        if not resp.ok:
+            raise HTTPException(status_code=502, detail="Error al obtener imagen")
+        content_type = resp.headers.get("Content-Type", "image/jpeg")
+        return Response(content=resp.content, media_type=content_type)
+    except requests.RequestException:
+        raise HTTPException(status_code=502, detail="No se pudo cargar la imagen")

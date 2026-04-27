@@ -1,5 +1,9 @@
 // ⚠️ Cambia esta IP por la de tu Mac: Ajustes → WiFi → detalles de red
-const BASE_URL = "http://192.168.1.138:8000";
+const BASE_URL = "http://10.152.212.123:8000";
+
+export function imagenUrl(wikimediaUrl: string): string {
+  return `${BASE_URL}/quiz/imagen?url=${encodeURIComponent(wikimediaUrl)}`;
+}
 
 export interface Pregunta {
   session_id: string;
