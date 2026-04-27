@@ -11,30 +11,34 @@ Niveles 9-10: escritura libre, tolerancia Levenshtein.
 """
 
 NIVELES: dict[int, dict] = {
-    # Pinturas icónicas (~25), solo artista/título
-    1:  {"campos": ["artista", "titulo"],                          "modo": "test",  "distractor": "global",     "popularidad_min": 4},
+    # Nivel 1: pinturas icónicas, solo artista
+    1:  {"campos": ["artista"],                                    "modo": "test",  "distractor": "global",     "popularidad_min": 4},
+    # Nivel 2: pinturas icónicas, artista o título
     2:  {"campos": ["artista", "titulo"],                          "modo": "test",  "distractor": "global",     "popularidad_min": 4},
-    # Pinturas conocidas (~218), se añade movimiento
-    3:  {"campos": ["artista", "titulo", "movimiento"],            "modo": "test",  "distractor": "global",     "popularidad_min": 3},
+    # Nivel 3: pinturas conocidas, artista o título
+    3:  {"campos": ["artista", "titulo"],                          "modo": "test",  "distractor": "global",     "popularidad_min": 3},
+    # Nivel 4: pinturas conocidas, se añade movimiento
     4:  {"campos": ["artista", "titulo", "movimiento"],            "modo": "test",  "distractor": "global",     "popularidad_min": 3},
-    # Pinturas moderadas (~723), se añade museo; distractores del mismo movimiento
-    5:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
+    # Nivel 5: pinturas moderadas, distractores del mismo movimiento
+    5:  {"campos": ["artista", "titulo", "movimiento"],            "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
+    # Nivel 6: pinturas moderadas, se añade museo
     6:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 2},
-    # Todas las pinturas (~1000), todos los campos
+    # Nivel 7: todas las pinturas, todos los campos
     7:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 1},
-    8:  {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "test",  "distractor": "movimiento", "popularidad_min": 1},
-    # Escritura libre, cualquier pintura, solo artista/título
+    # Nivel 8: todas las pinturas, se añade tipo de material
+    8:  {"campos": ["artista", "titulo", "movimiento", "museo", "tipo"], "modo": "test", "distractor": "movimiento", "popularidad_min": 1},
+    # Nivel 9: escritura libre, artista o título, tolerancia alta
     9:  {"campos": ["artista", "titulo"],                          "modo": "libre", "max_distancia": 2,         "popularidad_min": 1},
-    10: {"campos": ["artista", "titulo"],                          "modo": "libre", "max_distancia": 2,         "popularidad_min": 1},
+    # Nivel 10: escritura libre, todos los campos, tolerancia baja
+    10: {"campos": ["artista", "titulo", "movimiento", "museo"],   "modo": "libre", "max_distancia": 1,         "popularidad_min": 1},
 }
 
 PREGUNTAS: dict[str, str] = {
     "artista":    "¿Quién pintó este cuadro?",
     "titulo":     "¿Cómo se llama este cuadro?",
-    "anio":       "¿En qué año fue pintado este cuadro?",
     "museo":      "¿En qué museo se encuentra este cuadro?",
     "movimiento": "¿A qué movimiento artístico pertenece este cuadro?",
-    "epoca":      "¿A qué época pertenece este cuadro?",
+    "tipo":       "¿Con qué técnica fue pintado este cuadro?",
 }
 
 NIVEL_MIN = 1

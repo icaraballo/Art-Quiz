@@ -5,10 +5,10 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "splash": {
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0d0d1a"
     },
     "ios": {
       "supportsTablet": false,
@@ -17,9 +17,10 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0d0d1a"
       },
-      "package": "com.artquiz.app"
+      "package": "com.artquiz.app",
+      "usesCleartextTraffic": true
     },
     "plugins": [
       "expo-router",

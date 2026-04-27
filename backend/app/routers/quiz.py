@@ -4,19 +4,26 @@ Endpoints del quiz de arte.
 GET  /quiz/pregunta   → cuadro aleatorio + pregunta + opciones
 POST /quiz/respuesta  → valida respuesta, actualiza nivel
 GET  /quiz/progreso   → estadísticas de la sesión
+GET  /quiz/imagen     → proxy para imágenes de Wikimedia
 """
 
 import json
 import random
+import re
+import time
+import unicodedata
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
+from app.limiter import limiter
 from app.models.difficulty import (
     PREGUNTAS,
     actualizar_nivel,
@@ -41,24 +48,40 @@ def _cargar_paintings() -> list[dict]:
 
 
 PAINTINGS: list[dict] = _cargar_paintings()
-# Índice rápido id → painting
 PAINTINGS_IDX: dict[str, dict] = {p["id"]: p for p in PAINTINGS}
 
 # ---------------------------------------------------------------------------
-# Sesiones en memoria
+# Sesiones en memoria (LRU real + TTL por inactividad)
 # ---------------------------------------------------------------------------
 
-_sesiones: dict[str, dict] = {}
+_sesiones: OrderedDict[str, dict] = OrderedDict()
+_MAX_SESIONES = 500
+_TTL_SESION = 3600          # 1 hora sin actividad
+_DESCONOCIDOS = {"Museo desconocido", "Sin clasificar", "Desconocida", ""}
+CAMPOS_VALIDOS = {"artista", "titulo", "museo", "movimiento", "tipo"}
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def _limpiar_sesiones() -> None:
+    ahora = time.time()
+    caducadas = [sid for sid, e in _sesiones.items() if ahora - e["last_access"] > _TTL_SESION]
+    for sid in caducadas:
+        del _sesiones[sid]
+    while len(_sesiones) >= _MAX_SESIONES:
+        _sesiones.popitem(last=False)   # elimina la menos usada (FIFO = LRU cabeza)
 
 
 def _nueva_sesion() -> tuple[str, dict]:
+    _limpiar_sesiones()
     sid = str(uuid.uuid4())
     estado = {
         "nivel": 1,
         "racha": 0,
         "fallos_seguidos": 0,
-        "vistos": [],
+        "vistos": [],           # lista de (cuadro_id, campo) ya preguntados
         "historial": [],
+        "pregunta_actual": None,
+        "last_access": time.time(),
     }
     _sesiones[sid] = estado
     return sid, estado
@@ -67,14 +90,24 @@ def _nueva_sesion() -> tuple[str, dict]:
 def _obtener_sesion(session_id: str) -> dict:
     if session_id not in _sesiones:
         raise HTTPException(status_code=404, detail="Sesión no encontrada")
-    return _sesiones[session_id]
+    estado = _sesiones[session_id]
+    estado["last_access"] = time.time()
+    _sesiones.move_to_end(session_id)   # LRU: marcar como más reciente
+    return estado
 
 # ---------------------------------------------------------------------------
-# Levenshtein (puro Python, sin dependencias)
+# Levenshtein con normalización de acentos y puntuación
 # ---------------------------------------------------------------------------
+
+def _normalizar(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s.lower().strip())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r"[^\w\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
 
 def _levenshtein(a: str, b: str) -> int:
-    a, b = a.lower().strip(), b.lower().strip()
+    a, b = _normalizar(a), _normalizar(b)
     if a == b:
         return 0
     m, n = len(a), len(b)
@@ -96,21 +129,6 @@ def _valor(painting: dict, campo: str) -> str:
     return str(v) if v is not None else ""
 
 
-def _generar_opciones_anio(anio_correcto: int, margen: int) -> list[str]:
-    opciones: set[str] = {str(anio_correcto)}
-    intentos = 0
-    step = max(5, margen // 4)
-    while len(opciones) < 4 and intentos < 200:
-        candidato = anio_correcto + random.randint(-margen, margen)
-        candidato = (candidato // step) * step  # redondear para que quede creíble
-        if candidato > 0 and str(candidato) != str(anio_correcto):
-            opciones.add(str(candidato))
-        intentos += 1
-    lista = list(opciones)
-    random.shuffle(lista)
-    return lista
-
-
 def _generar_opciones(
     campo: str,
     valor_correcto: str,
@@ -120,11 +138,6 @@ def _generar_opciones(
 ) -> list[str]:
     cfg = config_nivel(nivel)
 
-    if campo == "anio":
-        anio = int(valor_correcto) if valor_correcto.isdigit() else 1800
-        return _generar_opciones_anio(anio, cfg.get("margen", 30))
-
-    # Construir pool de distractores
     if cfg.get("distractor") == "movimiento":
         pool = [
             _valor(p, campo)
@@ -132,7 +145,7 @@ def _generar_opciones(
             if _valor(p, campo) != valor_correcto
             and p.get("movimiento") == painting.get("movimiento")
         ]
-        if len(pool) < 3:  # fallback a pool global si no hay suficientes
+        if len(pool) < 3:
             pool = [_valor(p, campo) for p in db if _valor(p, campo) != valor_correcto]
     else:
         pool = [_valor(p, campo) for p in db if _valor(p, campo) != valor_correcto]
@@ -151,49 +164,59 @@ def _es_correcto(campo: str, respuesta: str, painting: dict, max_distancia: int)
     valor = _valor(painting, campo)
     respuesta = respuesta.strip()
 
-    if campo == "anio":
-        try:
-            return abs(int(respuesta) - int(valor)) <= 5
-        except ValueError:
-            return False
-
     if campo == "titulo":
-        # Acepta tanto titulo (español) como titulo_original
         for candidato in [valor, painting.get("titulo_original", "")]:
-            if _levenshtein(respuesta, candidato) <= max_distancia:
+            if candidato and _levenshtein(respuesta, candidato) <= max_distancia:
                 return True
         return False
 
     return _levenshtein(respuesta, valor) <= max_distancia
 
 # ---------------------------------------------------------------------------
-# Modelos Pydantic
+# Modelos Pydantic con validación de longitudes e inputs
 # ---------------------------------------------------------------------------
 
 class RespuestaRequest(BaseModel):
-    session_id: str
-    cuadro_id: str
-    campo: str
-    respuesta: str
+    session_id: str = Field(..., min_length=36, max_length=36)
+    cuadro_id:  str = Field(..., min_length=1,  max_length=64)
+    campo:      str = Field(..., min_length=1,  max_length=20)
+    respuesta:  str = Field(..., max_length=200)
+    timeout:    bool = False   # True = tiempo agotado, fuerza fallo y devuelve respuesta correcta
 
+    @field_validator("session_id")
+    @classmethod
+    def _val_session(cls, v: str) -> str:
+        if not _UUID_RE.match(v):
+            raise ValueError("session_id inválido")
+        return v
+
+    @field_validator("campo")
+    @classmethod
+    def _val_campo(cls, v: str) -> str:
+        if v not in CAMPOS_VALIDOS:
+            raise ValueError("campo desconocido")
+        return v
 
 # ---------------------------------------------------------------------------
 # GET /quiz/pregunta
 # ---------------------------------------------------------------------------
 
-@router.get("/pregunta")
-def obtener_pregunta(session_id: Optional[str] = None):
-    if not PAINTINGS:
-        raise HTTPException(
-            status_code=503,
-            detail="Base de datos vacía. Ejecuta scripts/fetch_wikidata.py",
-        )
+_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
-    # Crear sesión si no existe
+
+@router.get("/pregunta")
+@limiter.limit("120/minute")
+def obtener_pregunta(
+    request: Request,
+    session_id: Optional[str] = Query(None, max_length=36, pattern=_UUID_PATTERN),
+):
+    if not PAINTINGS:
+        raise HTTPException(status_code=503, detail="Base de datos no disponible")
+
     if session_id is None or session_id not in _sesiones:
         session_id, estado = _nueva_sesion()
     else:
-        estado = _sesiones[session_id]
+        estado = _obtener_sesion(session_id)
 
     nivel = estado["nivel"]
     cfg = config_nivel(nivel)
@@ -201,14 +224,13 @@ def obtener_pregunta(session_id: Optional[str] = None):
     campo = random.choice(campos_posibles)
     popularidad_min = cfg.get("popularidad_min", 1)
 
-    # Elegir cuadro que no se haya preguntado ya en esta sesión
-    vistos = set(estado["vistos"])
-    _DESCONOCIDOS = {"Museo desconocido", "Sin clasificar", "Desconocida", ""}
+    # Anti-repetición por (cuadro_id, campo): cada combinación se pregunta una sola vez por sesión
+    vistos: set[tuple[str, str]] = set(estado["vistos"])
 
     def _candidatos_para(pool: list[dict]) -> list[dict]:
         return [
             p for p in pool
-            if p["id"] not in vistos
+            if (p["id"], campo) not in vistos
             and _valor(p, campo)
             and _valor(p, campo) not in _DESCONOCIDOS
             and p.get("popularidad", 1) >= popularidad_min
@@ -217,17 +239,15 @@ def obtener_pregunta(session_id: Optional[str] = None):
     candidatos = _candidatos_para(PAINTINGS)
     ya_visto = False
     if not candidatos:
-        # Pool agotado — reiniciar vistos y marcar como repetición
         estado["vistos"] = []
         vistos = set()
         ya_visto = True
         candidatos = _candidatos_para(PAINTINGS)
     if not candidatos:
-        # Fallback sin filtro de popularidad (pool muy pequeño)
         candidatos = [p for p in PAINTINGS if _valor(p, campo) and _valor(p, campo) not in _DESCONOCIDOS]
 
     painting = random.choice(candidatos)
-    estado["vistos"].append(painting["id"])
+    estado["vistos"].append((painting["id"], campo))
 
     valor_correcto = _valor(painting, campo)
     modo = cfg["modo"]
@@ -236,13 +256,22 @@ def obtener_pregunta(session_id: Optional[str] = None):
     if modo == "test":
         opciones = _generar_opciones(campo, valor_correcto, nivel, painting, PAINTINGS)
 
+    # Guardar la pregunta activa para validar la respuesta posterior (evita cheating y doble envío)
+    estado["pregunta_actual"] = {
+        "cuadro_id": painting["id"],
+        "campo": campo,
+        "modo": modo,
+        "opciones": opciones,
+    }
+
     return {
         "session_id": session_id,
         "nivel": nivel,
         "cuadro": {
             "id": painting["id"],
             "image_url": painting["image_url"],
-            "titulo_display": painting["titulo"],
+            # No enviar el título cuando es precisamente lo que se pregunta
+            "titulo_display": painting["titulo"] if campo != "titulo" else None,
         },
         "pregunta": PREGUNTAS[campo],
         "campo": campo,
@@ -251,14 +280,27 @@ def obtener_pregunta(session_id: Optional[str] = None):
         "ya_visto": ya_visto,
     }
 
-
 # ---------------------------------------------------------------------------
 # POST /quiz/respuesta
 # ---------------------------------------------------------------------------
 
 @router.post("/respuesta")
-def validar_respuesta(body: RespuestaRequest):
+@limiter.limit("120/minute")
+def validar_respuesta(request: Request, body: RespuestaRequest):
     estado = _obtener_sesion(body.session_id)
+
+    # Verificar que la respuesta corresponde a la pregunta activa
+    actual = estado.get("pregunta_actual")
+    if not actual:
+        raise HTTPException(status_code=409, detail="No hay pregunta activa")
+    if actual["cuadro_id"] != body.cuadro_id or actual["campo"] != body.campo:
+        raise HTTPException(status_code=409, detail="La respuesta no corresponde a la pregunta activa")
+    # En timeout saltamos la validación de opción; en modo normal la aplicamos
+    if not body.timeout and actual["modo"] == "test" and actual["opciones"] and body.respuesta not in actual["opciones"]:
+        raise HTTPException(status_code=400, detail="Opción no válida")
+
+    # Invalida la pregunta para impedir doble envío
+    estado["pregunta_actual"] = None
 
     painting = PAINTINGS_IDX.get(body.cuadro_id)
     if painting is None:
@@ -267,7 +309,8 @@ def validar_respuesta(body: RespuestaRequest):
     cfg = config_nivel(estado["nivel"])
     max_distancia = cfg.get("max_distancia", 0)
 
-    correcto = _es_correcto(body.campo, body.respuesta, painting, max_distancia)
+    # Timeout siempre es fallo; respuesta normal se evalúa normalmente
+    correcto = False if body.timeout else _es_correcto(body.campo, body.respuesta, painting, max_distancia)
 
     nivel_anterior = estado["nivel"]
     nuevo_nivel, nueva_racha, nuevos_fallos = actualizar_nivel(
@@ -297,13 +340,16 @@ def validar_respuesta(body: RespuestaRequest):
         "racha": nueva_racha,
     }
 
-
 # ---------------------------------------------------------------------------
 # GET /quiz/progreso
 # ---------------------------------------------------------------------------
 
 @router.get("/progreso")
-def obtener_progreso(session_id: str):
+@limiter.limit("60/minute")
+def obtener_progreso(
+    request: Request,
+    session_id: str = Query(..., max_length=36, pattern=_UUID_PATTERN),
+):
     estado = _obtener_sesion(session_id)
 
     historial = estado["historial"]
@@ -317,21 +363,48 @@ def obtener_progreso(session_id: str):
         "total_aciertos": aciertos,
         "porcentaje": round(100 * aciertos / total) if total else 0,
         "racha_actual": estado["racha"],
-        "historial": historial[-20:],  # últimas 20 entradas
+        "historial": historial[-20:],
     }
-
 
 # ---------------------------------------------------------------------------
 # GET /quiz/imagen  — proxy para imágenes de Wikimedia
 # ---------------------------------------------------------------------------
 
+_DOMINIOS_PERMITIDOS = {"upload.wikimedia.org", "commons.wikimedia.org"}
+_MAX_IMAGE_BYTES = 8 * 1024 * 1024   # 8 MB
+
+
 @router.get("/imagen")
-def proxy_imagen(url: str):
+@limiter.limit("60/minute")
+def proxy_imagen(request: Request, url: str):
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in _DOMINIOS_PERMITIDOS:
+        raise HTTPException(status_code=400, detail="URL no permitida")
     try:
-        resp = requests.get(url, timeout=10, headers={"User-Agent": "ArtQuizApp/1.0 (educational)"})
-        if not resp.ok:
-            raise HTTPException(status_code=502, detail="Error al obtener imagen")
-        content_type = resp.headers.get("Content-Type", "image/jpeg")
-        return Response(content=resp.content, media_type=content_type)
+        with requests.get(
+            url,
+            stream=True,
+            timeout=10,
+            allow_redirects=False,
+            headers={"User-Agent": "ArtQuizApp/1.0 (educational)"},
+        ) as resp:
+            if not resp.ok:
+                raise HTTPException(status_code=502, detail="Error al obtener imagen")
+            ctype = resp.headers.get("Content-Type", "")
+            if not ctype.startswith("image/"):
+                raise HTTPException(status_code=502, detail="Respuesta no es una imagen")
+            buf = bytearray()
+            for chunk in resp.iter_content(64 * 1024):
+                buf.extend(chunk)
+                if len(buf) > _MAX_IMAGE_BYTES:
+                    raise HTTPException(status_code=413, detail="Imagen demasiado grande")
+            return Response(
+                content=bytes(buf),
+                media_type=ctype,
+                headers={
+                    "Cache-Control": "public, max-age=86400, immutable",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
     except requests.RequestException:
         raise HTTPException(status_code=502, detail="No se pudo cargar la imagen")
