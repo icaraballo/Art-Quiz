@@ -75,6 +75,9 @@ export default function PantallaQuiz() {
   const [imageRatio, setImageRatio]   = useState(4 / 3);
   const [enviando, setEnviando]       = useState(false);
   const [cargandoSiguiente, setCargandoSiguiente] = useState(false);
+  const [cargandoInicio, setCargandoInicio] = useState(false);
+
+  const animConexion = useRef(new Animated.Value(0)).current;
 
   // Temporizador
   const [tiempoRestante, setTiempoRestante] = useState<number | null>(null);
@@ -194,6 +197,16 @@ export default function PantallaQuiz() {
     setNivel(1);
     setRacha(0);
     animFade.setValue(1);
+    setCargandoInicio(true);
+    animConexion.setValue(0);
+
+    const animLenta = Animated.timing(animConexion, {
+      toValue: 0.9,
+      duration: 40000,
+      useNativeDriver: false,
+    });
+    animLenta.start();
+
     try {
       const savedId = await AsyncStorage.getItem(SESSION_KEY);
       let data: Pregunta;
@@ -207,12 +220,20 @@ export default function PantallaQuiz() {
           throw e;
         }
       }
+      animLenta.stop();
+      await new Promise<void>(resolve => {
+        Animated.timing(animConexion, { toValue: 1, duration: 300, useNativeDriver: false }).start(() => resolve());
+      });
       await AsyncStorage.setItem(SESSION_KEY, data.session_id);
       setPregunta(data);
       setNivel(data.nivel);
       setFase("pregunta");
     } catch {
+      animLenta.stop();
+      animConexion.setValue(0);
       Alert.alert("Sin conexión", "Comprueba que el servidor está encendido y que la IP en .env es correcta.");
+    } finally {
+      setCargandoInicio(false);
     }
   }
 
@@ -326,9 +347,28 @@ export default function PantallaQuiz() {
           <Text style={s.emojiInicio}>🎨</Text>
           <Text style={s.tituloInicio}>Art Quiz</Text>
           <Text style={s.subtituloInicio}>¿Cuánto sabes de arte?</Text>
-          <TouchableOpacity style={s.botonJugar} onPress={iniciarJuego} activeOpacity={0.8}>
-            <Text style={s.textoBotonJugar}>Jugar</Text>
-          </TouchableOpacity>
+          {cargandoInicio ? (
+            <View style={s.cargandoWrap}>
+              <Text style={s.cargandoTexto}>Conectando con el servidor...</Text>
+              <View style={s.cargandoBarFondo}>
+                <Animated.View
+                  style={[
+                    s.cargandoBarRelleno,
+                    {
+                      width: animConexion.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: ["0%", "100%"],
+                      }),
+                    },
+                  ]}
+                />
+              </View>
+            </View>
+          ) : (
+            <TouchableOpacity style={s.botonJugar} onPress={iniciarJuego} activeOpacity={0.8}>
+              <Text style={s.textoBotonJugar}>Jugar</Text>
+            </TouchableOpacity>
+          )}
         </Animated.View>
       </Animated.View>
     );
@@ -764,6 +804,12 @@ const s = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.08)",
   },
   textoSiguiente: { color: C.texto, fontSize: 16, fontWeight: "600" },
+
+  // Cargando inicio
+  cargandoWrap:      { alignItems: "center", width: "100%", gap: 14 },
+  cargandoTexto:     { color: C.suave, fontSize: 14 },
+  cargandoBarFondo:  { width: "100%", height: 6, backgroundColor: C.tarjeta, borderRadius: 3, overflow: "hidden" },
+  cargandoBarRelleno:{ height: "100%", backgroundColor: C.acento, borderRadius: 3 },
 
   // Overlay nivel
   nivelOverlay: {

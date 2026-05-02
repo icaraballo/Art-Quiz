@@ -4,7 +4,6 @@ export default function Layout() {
   return (
     <Tabs screenOptions={{ headerShown: false, tabBarStyle: { display: "none" } }}>
       <Tabs.Screen name="quiz" />
-      <Tabs.Screen name="camara" options={{ href: null }} />
     </Tabs>
   );
 }

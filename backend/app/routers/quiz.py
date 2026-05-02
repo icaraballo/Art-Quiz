@@ -59,7 +59,8 @@ _MAX_SESIONES = 500
 _TTL_SESION = 3600          # 1 hora sin actividad
 _DESCONOCIDOS = {"Museo desconocido", "Sin clasificar", "Desconocida", ""}
 CAMPOS_VALIDOS = {"artista", "titulo", "museo", "movimiento", "tipo"}
-_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+_UUID_RE = re.compile(_UUID_PATTERN)
 
 
 def _limpiar_sesiones() -> None:
@@ -138,19 +139,21 @@ def _generar_opciones(
 ) -> list[str]:
     cfg = config_nivel(nivel)
 
+    def _pool_global() -> list[str]:
+        return list({_valor(p, campo) for p in db if _valor(p, campo) and _valor(p, campo) != valor_correcto})
+
     if cfg.get("distractor") == "movimiento":
-        pool = [
+        pool = list({
             _valor(p, campo)
             for p in db
-            if _valor(p, campo) != valor_correcto
+            if _valor(p, campo) and _valor(p, campo) != valor_correcto
             and p.get("movimiento") == painting.get("movimiento")
-        ]
+        })
         if len(pool) < 3:
-            pool = [_valor(p, campo) for p in db if _valor(p, campo) != valor_correcto]
+            pool = _pool_global()
     else:
-        pool = [_valor(p, campo) for p in db if _valor(p, campo) != valor_correcto]
+        pool = _pool_global()
 
-    pool = [v for v in set(pool) if v]
     distractores = random.sample(pool, min(3, len(pool)))
     opciones = [valor_correcto] + distractores
     random.shuffle(opciones)
@@ -200,8 +203,6 @@ class RespuestaRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # GET /quiz/pregunta
 # ---------------------------------------------------------------------------
-
-_UUID_PATTERN = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 
 @router.get("/pregunta")
@@ -376,7 +377,7 @@ _MAX_IMAGE_BYTES = 8 * 1024 * 1024   # 8 MB
 
 @router.get("/imagen")
 @limiter.limit("60/minute")
-def proxy_imagen(request: Request, url: str):
+def proxy_imagen(request: Request, url: str = Query(..., max_length=500)):
     parsed = urlparse(url)
     if parsed.scheme != "https" or parsed.hostname not in _DOMINIOS_PERMITIDOS:
         raise HTTPException(status_code=400, detail="URL no permitida")
